@@ -1,8 +1,4 @@
-# -*- coding: utf-8 -*-
-"""
-BPDA stands for Backward Pass Differentiable Approximation
-
-"""
+"""Backward Pass Differentiable Approximation (BPDA) and PGD attack."""
 from abc import ABCMeta
 import numpy as np
 import torch
@@ -31,34 +27,17 @@ def _create_identity_function():
 
 def _create_backward_from_forwardsub(forwardsub):
     def backward(grad_output, x):
-        # TODO: maybe the detach().clone() pattern can probably be simplified
         x = x.detach().clone().requires_grad_()
         grad_output = grad_output.detach().clone()
         with torch.enable_grad():
             y = forwardsub(x)
-            # both of the following return function seems working fine,
-            #   using the lower one to make sure there's no side effects
-            # return autograd.grad(y, x, grad_output)
             return autograd.grad(y, x, grad_output)[0].detach().clone()
     return backward
 
 class BPDAWrapper(nn.Module):
-    """
-    Wrap forward module with BPDA backward path
-    If forwardsub is not None, then ignore backward
-
-    :param forwardsub: substitute forward function for BPDA
-    :param backward: substitute backward function for BPDA
-    """
+    """Wrap forward module with BPDA backward path."""
 
     def __init__(self, forward, forwardsub=None, backward=None):
-        """
-        Here we assume forward and forwardsub only takes one input x
-        and backward takes two inputs grad_output and x
-        TODO: adding assert for this, tried inspect.getargspec, but doesn't
-            seem to be easy to cover all cases, regular function, class method
-            and etc...
-        """
         super(BPDAWrapper, self).__init__()
 
         if forwardsub is not None:
@@ -81,39 +60,19 @@ class BPDAWrapper(nn.Module):
         
         
 class Attack(object):
-    """
-    Abstract base class for all attack classes.
-    
-    :param predict: forward pass function.
-    :param loss_fn: loss function that takes .
-    :param clip_min: mininum value per input dimension.
-    :param clip_max: maximum value per input dimension.
-
-    """
+    """Abstract base class for all attack classes."""
 
     __metaclass__ = ABCMeta
 
     def __init__(self, predict, loss_fn, clip_min, clip_max):
-        """
-        Create an Attack instance.
-
-        """
         self.predict = predict
         self.loss_fn = loss_fn
         self.clip_min = clip_min
         self.clip_max = clip_max
 
     def perturb(self, x, **kwargs):
-        """
-        Generate the adversarial examples. This method should be overriden
-        in any child class that implements an actual attack.
-
-        :param x: the model's input tensor.
-        :param **kwargs: optional parameters used by child classes.
-        :return: adversarial examples.
-        """
-        error = "Sub-classes must implement perturb."
-        raise NotImplementedError(error)
+        """Generate adversarial examples. Override in subclasses."""
+        raise NotImplementedError("Sub-classes must implement perturb.")
 
     def __call__(self, *args, **kwargs):
         return self.perturb(*args, **kwargs)
@@ -124,13 +83,7 @@ def is_float_or_torch_tensor(x):
     return isinstance(x, torch.Tensor) or isinstance(x, float)
 class LabelMixin(object):
     def _get_predicted_label(self, x):
-        """
-        Compute predicted labels given x. Used to prevent label leaking
-        during adversarial training.
-
-        :param x: the model's input tensor.
-        :return: tensor containing predicted labels.
-        """
+        """Compute predicted labels to prevent label leaking."""
         with torch.no_grad():
             outputs = self.predict(x)
         _, y = torch.max(outputs, dim=1)
@@ -161,11 +114,7 @@ def clamp(input, min=None, max=None):
         raise ValueError("This is impossible") 
         
 def _batch_multiply_tensor_by_vector(vector, batch_tensor):
-    """Equivalent to the following
-    for ii in range(len(vector)):
-        batch_tensor.data[ii] *= vector[ii]
-    return batch_tensor
-    """
+    """Multiply each sample in batch_tensor by corresponding scalar in vector."""
     return (
         batch_tensor.transpose(0, -1) * vector).transpose(0, -1).contiguous()
 
@@ -194,27 +143,13 @@ def clamp_by_pnorm(x, p, r):
     return batch_multiply(factor, x)
 
 def _batch_clamp_tensor_by_vector(vector, batch_tensor):
-    """Equivalent to the following
-    for ii in range(len(vector)):
-        batch_tensor[ii] = clamp(
-            batch_tensor[ii], -vector[ii], vector[ii])
-    """
+    """Clamp each sample in batch_tensor by corresponding value in vector."""
     return torch.min(
         torch.max(batch_tensor.transpose(0, -1), -vector), vector
     ).transpose(0, -1).contiguous()
         
 def rand_init_delta(delta, x, ord, eps, clip_min, clip_max):
-    # TODO: Currently only considered one way of "uniform" sampling
-    # for Linf, there are 3 ways:
-    #   1) true uniform sampling by first calculate the rectangle then sample
-    #   2) uniform in eps box then truncate using data domain (implemented)
-    #   3) uniform sample in data domain then truncate with eps box
-    # for L2, true uniform sampling is hard, since it requires uniform sampling
-    #   inside a intersection of cube and ball, so there are 2 ways:
-    #   1) uniform sample in the data domain, then truncate using the L2 ball
-    #       (implemented)
-    #   2) uniform sample in the L2 ball, then truncate using the data domain
-
+    """Random initialization for perturbation delta."""
     if isinstance(eps, torch.Tensor):
         assert len(eps) == len(delta)
 
@@ -244,18 +179,7 @@ def batch_clamp(float_or_vector, tensor):
         raise TypeError("Value has to be float or torch.Tensor")
     return tensor
 def normalize_by_pnorm(x, p=2, small_constant=1e-6):
-    """
-    Normalize gradients for gradient (not gradient sign) attacks.
-    # TODO: move this function to utils
-
-    :param x: tensor containing the gradients on the input.
-    :param p: (optional) order of the norm for the normalization (1 or 2).
-    :param small_constant: (optional float) to avoid dividing by zero.
-    :return: normalized gradients.
-    """
-    # loss is averaged over the batch so need to multiply the batch
-    # size to find the actual gradient of each input sample
-
+    """Normalize gradients by p-norm."""
     assert isinstance(p, float) or isinstance(p, int)
     norm = _get_norm_batch(x, p)
     norm = torch.max(norm, torch.ones_like(norm) * small_constant)
@@ -263,25 +187,7 @@ def normalize_by_pnorm(x, p=2, small_constant=1e-6):
 def perturb_iterative(xvar, yvar, predict, nb_iter, eps, eps_iter, loss_fn,
                       delta_init=None, minimize=False, ord=np.inf,
                       clip_min=0.0, clip_max=1.0):
-    """
-    Iteratively maximize the loss over the input. It is a shared method for
-    iterative attacks including IterativeGradientSign, LinfPGD, etc.
-
-    :param xvar: input data.
-    :param yvar: input labels.
-    :param predict: forward pass function.
-    :param nb_iter: number of iterations.
-    :param eps: maximum distortion.
-    :param eps_iter: attack step size.
-    :param loss_fn: loss function.
-    :param delta_init: (optional) tensor contains the random initialization.
-    :param minimize: (optional bool) whether to minimize or maximize the loss.
-    :param ord: (optional) the order of maximum distortion (inf or 2).
-    :param clip_min: mininum value per input dimension.
-    :param clip_max: maximum value per input dimension.
-
-    :return: tensor containing the perturbed input.
-    """
+    """Iterative PGD perturbation (supports Linf and L2)."""
     if delta_init is not None:
         delta = delta_init
     else:
@@ -320,31 +226,12 @@ def perturb_iterative(xvar, yvar, predict, nb_iter, eps, eps_iter, loss_fn,
     return x_adv
 
 class PGDAttack(Attack, LabelMixin):
-    """
-    The projected gradient descent attack (Madry et al, 2017).
-    The attack performs nb_iter steps of size eps_iter, while always staying
-    within eps from the initial point.
-    Paper: https://arxiv.org/pdf/1706.06083.pdf
+    """PGD attack (Madry et al, 2017). Supports Linf and L2."""
 
-    :param predict: forward pass function.
-    :param loss_fn: loss function.
-    :param eps: maximum distortion.
-    :param nb_iter: number of iterations.
-    :param eps_iter: attack step size.
-    :param rand_init: (optional bool) random initialization.
-    :param clip_min: mininum value per input dimension.
-    :param clip_max: maximum value per input dimension.
-    :param ord: (optional) the order of maximum distortion (inf or 2).
-    :param targeted: if the attack is targeted.
-    """
     def __init__(
             self, predict, loss_fn=None, eps=0.3, nb_iter=40,
             eps_iter=0.01, rand_init=True, clip_min=0., clip_max=1.,
             ord=np.inf, targeted=False):
-        """
-        Create an instance of the PGDAttack.
-
-        """
         super(PGDAttack, self).__init__(
             predict, loss_fn, clip_min, clip_max)
         self.eps = eps
@@ -360,17 +247,7 @@ class PGDAttack(Attack, LabelMixin):
         assert is_float_or_torch_tensor(self.eps)
 
     def perturb(self, x, y=None):
-        """
-        Given examples (x, y), returns their adversarial counterparts with
-        an attack length of eps.
-
-        :param x: input tensor.
-        :param y: label tensor.
-                  - if None and self.targeted=False, compute y as predicted
-                    labels.
-                  - if self.targeted=True, then y must be the targeted labels.
-        :return: tensor containing perturbed inputs.
-        """
+        """Generate adversarial examples with perturbation budget eps."""
         x, y = self._verify_and_process_inputs(x, y)
 
         delta = torch.zeros_like(x)
