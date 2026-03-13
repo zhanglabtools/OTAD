@@ -5,7 +5,6 @@ import random
 import torch
 import numpy as np
 import torch.nn as nn
-import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
 import os
@@ -118,33 +117,36 @@ for batch_idx, (inputs, targets) in enumerate(newtrainloader):
 print(f'DML feature shape: {dmlfeature.shape}')
 
 # OTAD-T defense (uses MOSEK solvers)
-class OTAD(nn.Module):
-    def __init__(self, net):
-        super(OTAD, self).__init__()
-        self.net = net
+if args.defense == 'otad-t':
+    class OTAD(nn.Module):
+        def __init__(self, net):
+            super(OTAD, self).__init__()
+            self.net = net
 
-    def forward(self, x):
-        lt = l1
-        Lt = L1
-        cls_token = dmlnet(x).detach()
-        embed = net.embedding(net.normalization(x)).view(x.shape[0], -1).detach().cpu().numpy()
-        indices = find_neighbors_batch(dmlfeature, cls_token, num_s).cpu().numpy()
-        input_local = OTinput[indices].squeeze(0)
-        output_local = OToutput[indices].squeeze(0)
-        while 1:
-            try:
-                U = LP(lt, Lt, input_local, output_local)
-            except:
-                Lt = Lt + 1
-                lt = lt - 1
-                continue
-            else:
-                break
-        v, test_output = QCQP(l2, L2, input_local, output_local, U, embed)
-        test_output = torch.from_numpy(test_output).cuda().float()
-        return test_output.view(x.shape[0], 65, 384)
+        def forward(self, x):
+            lt = l1
+            Lt = L1
+            cls_token = dmlnet(x).detach()
+            embed = net.embedding(net.normalization(x)).view(x.shape[0], -1).detach().cpu().numpy()
+            indices = find_neighbors_batch(dmlfeature, cls_token, num_s).cpu().numpy()
+            input_local = OTinput[indices].squeeze(0)
+            output_local = OToutput[indices].squeeze(0)
+            while 1:
+                try:
+                    U = LP(lt, Lt, input_local, output_local)
+                except:
+                    Lt = Lt + 1
+                    lt = lt - 1
+                    continue
+                else:
+                    break
+            v, test_output = QCQP(l2, L2, input_local, output_local, U, embed)
+            test_output = torch.from_numpy(test_output).cuda().float()
+            return test_output.view(x.shape[0], 65, 384)
 
-# OTAD-T-NN defense (uses QCQPNet)
+    defense = nn.Sequential(OTAD(net))
+
+# OTAD-T-NN defense (uses CIPNet)
 if args.defense == 'otad-t-nn':
     cipnet = CIPNet(num_neighbors=10*2, point_dim=24960, dim=2048, depth=6,
                     heads=8, mlp_dim=512, dropout=0.1).cuda()
@@ -157,20 +159,22 @@ if args.defense == 'otad-t-nn':
     OTinput_tensor = torch.from_numpy(OTinput).cuda()
     OToutput_tensor = torch.from_numpy(OToutput).cuda()
 
-class OTAD_NN(nn.Module):
-    def __init__(self, net):
-        super(OTAD_NN, self).__init__()
-        self.net = net
+    class OTAD_NN(nn.Module):
+        def __init__(self, net):
+            super(OTAD_NN, self).__init__()
+            self.net = net
 
-    def forward(self, x):
-        cls_token = dmlnet(x).detach()
-        indices = find_neighbors_batch(dmlfeature, cls_token, num_s)
-        input_neighbors = OTinput_tensor[indices]
-        output_neighbors = OToutput_tensor[indices]
-        embed = net.embedding(net.normalization(x)).view(x.shape[0], -1)
-        neighbors = torch.cat((input_neighbors, output_neighbors), 1).cuda()
-        test_output = cipnet(embed, neighbors)
-        return test_output.view(x.shape[0], 65, 384)
+        def forward(self, x):
+            cls_token = dmlnet(x).detach()
+            indices = find_neighbors_batch(dmlfeature, cls_token, num_s)
+            input_neighbors = OTinput_tensor[indices]
+            output_neighbors = OToutput_tensor[indices]
+            embed = net.embedding(net.normalization(x)).view(x.shape[0], -1)
+            neighbors = torch.cat((input_neighbors, output_neighbors), 1).cuda()
+            test_output = cipnet(embed, neighbors)
+            return test_output.view(x.shape[0], 65, 384)
+
+    defense = nn.Sequential(OTAD_NN(net))
 
 class ClassifierWrapper(nn.Module):
     def __init__(self, classifier):
@@ -182,69 +186,58 @@ class ClassifierWrapper(nn.Module):
 
 wrapped_classifier = ClassifierWrapper(net.classifier)
 
-if args.defense == 'otad-t':
-    defense = nn.Sequential(OTAD(net))
-else:
-    defense = nn.Sequential(OTAD_NN(net))
-
 defense_withbpda = BPDAWrapper(defense, forwardsub=midnet)
 defended_model = nn.Sequential(defense_withbpda, wrapped_classifier)
 defended_model.eval()
 
-# --- Linf PGD Attack ---
+# --- Linf BPDA+PGD Attack ---
 total = 0
-correct_1 = 0
-correct_2 = 0
-correct_3 = 0
+correct_robust = 0
+correct_standard = 0
 
-print(f'\n==> Linf PGD attack ({args.defense})...')
+print(f'\n==> Linf BPDA+PGD attack ({args.defense})...')
 for batch_idx, (inputs, targets) in enumerate(testloader):
     inputs, targets = inputs.cuda(), targets.cuda()
 
     atk = PGDAttack(defended_model, eps=8/255, eps_iter=2/255, nb_iter=20)
     inputs_adv = atk.perturb(inputs, targets)
 
-    outputs_1 = net(inputs_adv)
-    _, predicted_1 = outputs_1.max(1)
-    correct_1 += predicted_1.eq(targets).sum().item()
+    outputs_robust = net.classifier(defense(inputs_adv))
+    _, predicted_robust = outputs_robust.max(1)
+    correct_robust += predicted_robust.eq(targets).sum().item()
 
-    outputs_2 = net.classifier(defense(inputs_adv))
-    _, predicted_2 = outputs_2.max(1)
-    correct_2 += predicted_2.eq(targets).sum().item()
-
-    outputs_3 = net.classifier(defense(inputs))
-    _, predicted_3 = outputs_3.max(1)
-    correct_3 += predicted_3.eq(targets).sum().item()
+    outputs_standard = net.classifier(defense(inputs))
+    _, predicted_standard = outputs_standard.max(1)
+    correct_standard += predicted_standard.eq(targets).sum().item()
 
     total += targets.size(0)
 
     if (batch_idx + 1) % 100 == 0:
-        print(f'[{total}] No defense: {100.*correct_1/total:.2f}% | '
-              f'Defense (adv): {100.*correct_2/total:.2f}% | '
-              f'Defense (clean): {100.*correct_3/total:.2f}%')
+        print(f'[{total}] Robust Accuracy: {100.*correct_robust/total:.2f}% | '
+              f'Standard Accuracy: {100.*correct_standard/total:.2f}%')
 
-# --- L2 PGD Attack ---
+# --- L2 BPDA+PGD Attack ---
 total = 0
-correct_2 = 0
-correct_3 = 0
+correct_robust = 0
+correct_standard = 0
 
-print(f'\n==> L2 PGD attack ({args.defense})...')
+print(f'\n==> L2 BPDA+PGD attack ({args.defense})...')
 for batch_idx, (inputs, targets) in enumerate(testloader):
     inputs, targets = inputs.cuda(), targets.cuda()
 
     atk = PGDAttack(defended_model, eps=0.5, eps_iter=0.05, nb_iter=20, ord=2)
     inputs_adv = atk.perturb(inputs, targets)
 
-    outputs_2 = net.classifier(defense(inputs_adv))
-    _, predicted_2 = outputs_2.max(1)
-    correct_2 += predicted_2.eq(targets).sum().item()
+    outputs_robust = net.classifier(defense(inputs_adv))
+    _, predicted_robust = outputs_robust.max(1)
+    correct_robust += predicted_robust.eq(targets).sum().item()
 
-    outputs_3 = net.classifier(defense(inputs))
-    _, predicted_3 = outputs_3.max(1)
-    correct_3 += predicted_3.eq(targets).sum().item()
+    outputs_standard = net.classifier(defense(inputs))
+    _, predicted_standard = outputs_standard.max(1)
+    correct_standard += predicted_standard.eq(targets).sum().item()
 
     total += targets.size(0)
 
     if (batch_idx + 1) % 100 == 0:
-        print(f'[{total}] Defense (adv): {100.*correct_2/total:.2f}% | '
-              f'Defense (clean): {100.*correct_3/total:.2f}%')
+        print(f'[{total}] Robust Accuracy: {100.*correct_robust/total:.2f}% | '
+              f'Standard Accuracy: {100.*correct_standard/total:.2f}%')

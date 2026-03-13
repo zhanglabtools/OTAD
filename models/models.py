@@ -4,23 +4,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class BasicBlock(nn.Module):
-    expansion = 1
-    def __init__(self, planes):
-        super(BasicBlock, self).__init__()
-        self.bn1 = nn.BatchNorm1d(planes)
-        self.lin1 = nn.Linear(planes,planes)
-        self.bn2 = nn.BatchNorm1d(planes)
-        self.lin2 = nn.Linear(planes,planes)
-        self.shortcut = nn.Sequential()
-
-    def forward(self, x):
-        out = F.relu(self.bn1(x))
-        out = self.lin1(out)
-        out = self.lin2(F.relu(self.bn2(out)))
-        out += self.shortcut(x)
-        return out
-
 class CNNBlock(nn.Module):
     expansion = 1
 

@@ -2,12 +2,7 @@
 
 import torch
 from torch import nn
-
-from einops import rearrange, repeat
-from einops.layers.torch import Rearrange
-
-def pair(t):
-    return t if isinstance(t, tuple) else (t, t)
+from einops import rearrange
 
 class PreNorm(nn.Module):
     def __init__(self, dim, fn):
@@ -129,7 +124,6 @@ class CIPNet(nn.Module):
         self.classifier = Classifier(dim, point_dim)
 
     def forward(self, base_points, neighbors):
-
         x = self.embedding(base_points, neighbors)
         x = self.transformer(x)
 

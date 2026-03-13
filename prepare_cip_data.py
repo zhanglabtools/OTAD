@@ -112,45 +112,44 @@ vv = []
 os.makedirs('./precomputed', exist_ok=True)
 
 for batch_idx, (inputs, targets) in enumerate(trainOTloader):
-    if batch_idx >= 39000:
-        lt = l1
-        Lt = L1
-        inputs = inputs.cuda()
-        cls_token = dmlnet(inputs).detach().cpu().numpy()
-        embed = net.embedding(net.normalization(inputs)).view(inputs.shape[0], -1).detach().cpu().numpy()
-        embedinput.append(embed)
+    lt = l1
+    Lt = L1
+    inputs = inputs.cuda()
+    cls_token = dmlnet(inputs).detach().cpu().numpy()
+    embed = net.embedding(net.normalization(inputs)).view(inputs.shape[0], -1).detach().cpu().numpy()
+    embedinput.append(embed)
 
-        dsort, _ = distancevector_1(dmlfeature, cls_token, num_s + 1)
-        neighbors.append(dsort)
+    dsort, _ = distancevector_1(dmlfeature, cls_token, num_s + 1)
+    neighbors.append(dsort)
 
-        input_local = OTinput[dsort, :]
-        output_local = OToutput[dsort, :]
+    input_local = OTinput[dsort, :]
+    output_local = OToutput[dsort, :]
 
-        while 1:
-            try:
-                U = LP(lt, Lt, input_local, output_local)
-            except:
-                Lt = Lt + 1
-                lt = lt - 1
-                continue
-            else:
-                break
+    while 1:
+        try:
+            U = LP(lt, Lt, input_local, output_local)
+        except:
+            Lt = Lt + 1
+            lt = lt - 1
+            continue
+        else:
+            break
 
-        uu.append(U)
-        v, new_output = QCQP(l2, L2, input_local, output_local, U, embed)
-        cipout.append(new_output.reshape(1, -1).astype(np.float32))
-        vv.append(v.reshape(1, -1).astype(np.float32))
+    uu.append(U)
+    v, new_output = QCQP(l2, L2, input_local, output_local, U, embed)
+    cipout.append(new_output.reshape(1, -1).astype(np.float32))
+    vv.append(v.reshape(1, -1).astype(np.float32))
 
-        if (batch_idx + 1) % 1000 == 0:
-            print(f'Batch {batch_idx + 1} completed, saving...')
-            np.save(f'./precomputed/cip_embedinput_{batch_idx+1}.npy', embedinput)
-            np.save(f'./precomputed/cip_neighbors_{batch_idx+1}.npy', neighbors)
-            np.save(f'./precomputed/cip_uu_{batch_idx+1}.npy', uu)
-            np.save(f'./precomputed/cip_output_{batch_idx+1}.npy', cipout)
-            np.save(f'./precomputed/cip_vv_{batch_idx+1}.npy', vv)
-            embedinput.clear()
-            neighbors.clear()
-            uu.clear()
-            cipout.clear()
-            vv.clear()
-            print(f'Batch {batch_idx + 1} data saved.')
+    if (batch_idx + 1) % 1000 == 0:
+        print(f'Batch {batch_idx + 1} completed, saving...')
+        np.save(f'./precomputed/cip_embedinput_{batch_idx+1}.npy', embedinput)
+        np.save(f'./precomputed/cip_neighbors_{batch_idx+1}.npy', neighbors)
+        np.save(f'./precomputed/cip_uu_{batch_idx+1}.npy', uu)
+        np.save(f'./precomputed/cip_output_{batch_idx+1}.npy', cipout)
+        np.save(f'./precomputed/cip_vv_{batch_idx+1}.npy', vv)
+        embedinput.clear()
+        neighbors.clear()
+        uu.clear()
+        cipout.clear()
+        vv.clear()
+        print(f'Batch {batch_idx + 1} data saved.')

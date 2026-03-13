@@ -31,8 +31,7 @@ OTAD/
 - Python 3.8+
 - PyTorch
 - torchvision
-- einops
-- mosek (with valid license)
+- mosek (Obtain a license in https://www.mosek.com/downloads/) 
 - pytorch-metric-learning
 - autoattack
 

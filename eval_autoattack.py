@@ -5,7 +5,6 @@ import random
 import torch
 import numpy as np
 import torch.nn as nn
-import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
 import os
@@ -147,9 +146,8 @@ defended_model.eval()
 
 # --- L2 AutoAttack ---
 total = 0
-correct_1 = 0
-correct_2 = 0
-correct_3 = 0
+correct_robust = 0
+correct_standard = 0
 
 print(f'\n==> L2 AutoAttack (otad-t-nn)...')
 for batch_idx, (inputs, targets) in enumerate(testloader):
@@ -158,30 +156,24 @@ for batch_idx, (inputs, targets) in enumerate(testloader):
     adversary = AutoAttack(defended_model, norm='L2', eps=0.5, version='standard', verbose=True)
     inputs_adv = adversary.run_standard_evaluation(inputs, targets)
 
-    outputs_1 = net(inputs_adv)
-    _, predicted_1 = outputs_1.max(1)
-    correct_1 += predicted_1.eq(targets).sum().item()
+    outputs_robust = net.classifier(defense(inputs_adv))
+    _, predicted_robust = outputs_robust.max(1)
+    correct_robust += predicted_robust.eq(targets).sum().item()
 
-    outputs_2 = net.classifier(defense(inputs_adv))
-    _, predicted_2 = outputs_2.max(1)
-    correct_2 += predicted_2.eq(targets).sum().item()
-
-    outputs_3 = net.classifier(defense(inputs))
-    _, predicted_3 = outputs_3.max(1)
-    correct_3 += predicted_3.eq(targets).sum().item()
+    outputs_standard = net.classifier(defense(inputs))
+    _, predicted_standard = outputs_standard.max(1)
+    correct_standard += predicted_standard.eq(targets).sum().item()
 
     total += targets.size(0)
 
     if (batch_idx + 1) % 100 == 0:
-        print(f'[{total}] No defense: {100.*correct_1/total:.2f}% | '
-              f'Defense (adv): {100.*correct_2/total:.2f}% | '
-              f'Defense (clean): {100.*correct_3/total:.2f}%')
+        print(f'[{total}] Robust Accuracy: {100.*correct_robust/total:.2f}% | '
+              f'Standard Accuracy: {100.*correct_standard/total:.2f}%')
 
 # --- Linf AutoAttack ---
 total = 0
-correct_1 = 0
-correct_2 = 0
-correct_3 = 0
+correct_robust = 0
+correct_standard = 0
 
 print(f'\n==> Linf AutoAttack (otad-t-nn)...')
 for batch_idx, (inputs, targets) in enumerate(testloader):
@@ -190,21 +182,16 @@ for batch_idx, (inputs, targets) in enumerate(testloader):
     adversary = AutoAttack(defended_model, norm='Linf', eps=8/255, version='standard', verbose=True)
     inputs_adv = adversary.run_standard_evaluation(inputs, targets)
 
-    outputs_1 = net(inputs_adv)
-    _, predicted_1 = outputs_1.max(1)
-    correct_1 += predicted_1.eq(targets).sum().item()
+    outputs_robust = net.classifier(defense(inputs_adv))
+    _, predicted_robust = outputs_robust.max(1)
+    correct_robust += predicted_robust.eq(targets).sum().item()
 
-    outputs_2 = net.classifier(defense(inputs_adv))
-    _, predicted_2 = outputs_2.max(1)
-    correct_2 += predicted_2.eq(targets).sum().item()
-
-    outputs_3 = net.classifier(defense(inputs))
-    _, predicted_3 = outputs_3.max(1)
-    correct_3 += predicted_3.eq(targets).sum().item()
+    outputs_standard = net.classifier(defense(inputs))
+    _, predicted_standard = outputs_standard.max(1)
+    correct_standard += predicted_standard.eq(targets).sum().item()
 
     total += targets.size(0)
 
     if (batch_idx + 1) % 100 == 0:
-        print(f'[{total}] No defense: {100.*correct_1/total:.2f}% | '
-              f'Defense (adv): {100.*correct_2/total:.2f}% | '
-              f'Defense (clean): {100.*correct_3/total:.2f}%')
+        print(f'[{total}] Robust Accuracy: {100.*correct_robust/total:.2f}% | '
+              f'Standard Accuracy: {100.*correct_standard/total:.2f}%')
